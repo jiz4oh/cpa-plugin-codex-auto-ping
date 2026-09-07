@@ -84,7 +84,7 @@ import (
 
 const (
 	pluginName    = "auto-ping"
-	version       = "0.2.0"
+	version       = "0.2.1"
 	codexURL      = "https://chatgpt.com/backend-api/codex/responses"
 	modelName     = "gpt-5.6-luna"
 	defaultPrompt = "ping"
@@ -158,9 +158,17 @@ type codexPart struct {
 }
 
 type registerResult struct {
-	SchemaVersion int             `json:"schema_version"`
-	Metadata      metadata        `json:"metadata"`
-	Capabilities  map[string]bool `json:"capabilities"`
+	SchemaVersion int                  `json:"schema_version"`
+	Metadata      metadata             `json:"metadata"`
+	Capabilities  registerCapabilities `json:"capabilities"`
+}
+
+type registerCapabilities struct {
+	ManagementAPI bool `json:"management_api"`
+}
+
+type managementRegistration struct {
+	Resources []any `json:"resources"`
 }
 
 type metadata struct {
@@ -220,6 +228,8 @@ func autoPingPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 		}
 		applyConfig(cfg)
 		return writeJSON(response, okEnvelope(registrationResult()))
+	case "management.register":
+		return writeJSON(response, okEnvelope(managementRegistration{Resources: []any{}}))
 	case "plugin.shutdown":
 		stopScheduler()
 		return writeJSON(response, okEnvelope(map[string]any{"status": "stopped"}))
@@ -240,7 +250,7 @@ func autoPingPluginShutdown() { stopScheduler() }
 func registrationResult() registerResult {
 	cfg := defaultConfig()
 	return registerResult{
-		SchemaVersion: 1,
+		SchemaVersion: 5,
 		Metadata: metadata{
 			Name:             pluginName,
 			Version:          version,
@@ -252,7 +262,7 @@ func registrationResult() registerResult {
 				{Name: "times", Type: "string", Description: "Daily HH:MM times. YAML list is recommended, e.g. [06:00, 11:00, 16:00, 21:00].", DefaultValue: strings.Join(cfg.Times, ",")},
 			},
 		},
-		Capabilities: map[string]bool{},
+		Capabilities: registerCapabilities{ManagementAPI: true},
 	}
 }
 
