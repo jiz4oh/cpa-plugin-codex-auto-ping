@@ -103,10 +103,6 @@ At each configured time the plugin:
 
 The request uses `store: false` and `stream: true`. It is still a real model request and therefore can consume a small amount of quota.
 
-## Migration from auto-ping
-
-`codex-auto-ping` is a new CPA plugin ID. Remove the old `auto-ping` installation/config after installing this version to avoid both schedulers running at the same time.
-
 ## Repository
 
 https://github.com/jiz4oh/cpa-plugin-codex-auto-ping
