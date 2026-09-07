@@ -19,16 +19,29 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Build Linux amd64 plugin
+      - name: Resolve version
+        id: version
+        shell: bash
         run: |
+          set -euo pipefail
+          version=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' main.go | head -n1)
+          test -n "$version"
+          echo "version=${version#v}" >> "$GITHUB_OUTPUT"
+      - name: Build and package Linux amd64
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          mkdir -p package dist
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
             go build -buildmode=c-shared -trimpath -ldflags="-s -w" \
-            -o auto-ping_linux_amd64.so .
-          rm -f auto-ping_linux_amd64.h
+            -o package/auto-ping.so .
+          rm -f package/auto-ping.h
+          (cd package && zip -q "../dist/auto-ping_${version}_linux_amd64.zip" auto-ping.so)
       - uses: actions/upload-artifact@v4
         with:
           name: auto-ping_linux_amd64
-          path: auto-ping_linux_amd64.so
+          path: dist/*.zip
 
   darwin-arm64:
     runs-on: macos-14
@@ -37,16 +50,29 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Build macOS arm64 plugin
+      - name: Resolve version
+        id: version
+        shell: bash
         run: |
+          set -euo pipefail
+          version=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' main.go | head -n1)
+          test -n "$version"
+          echo "version=${version#v}" >> "$GITHUB_OUTPUT"
+      - name: Build and package macOS arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          mkdir -p package dist
           CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
             go build -buildmode=c-shared -trimpath -ldflags="-s -w" \
-            -o auto-ping_darwin_arm64.dylib .
-          rm -f auto-ping_darwin_arm64.h
+            -o package/auto-ping.dylib .
+          rm -f package/auto-ping.h
+          (cd package && zip -q "../dist/auto-ping_${version}_darwin_arm64.zip" auto-ping.dylib)
       - uses: actions/upload-artifact@v4
         with:
           name: auto-ping_darwin_arm64
-          path: auto-ping_darwin_arm64.dylib
+          path: dist/*.zip
 
   release:
     if: github.event_name != 'pull_request'
@@ -70,10 +96,7 @@ jobs:
             tag="$GITHUB_REF_NAME"
           else
             version=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' main.go | head -n1)
-            if [[ -z "$version" ]]; then
-              echo "Unable to read plugin version from main.go" >&2
-              exit 1
-            fi
+            test -n "$version"
             tag="v${version#v}"
           fi
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
@@ -81,6 +104,13 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum auto-ping_*.zip > checksums.txt
 
       - name: Publish GitHub Release
         env:
@@ -90,6 +120,9 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Remove legacy raw binaries from older workflow versions if present.
+            gh release delete-asset "$TAG" auto-ping_linux_amd64.so --repo "$GITHUB_REPOSITORY" -y 2>/dev/null || true
+            gh release delete-asset "$TAG" auto-ping_darwin_arm64.dylib --repo "$GITHUB_REPOSITORY" -y 2>/dev/null || true
             gh release upload "$TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
