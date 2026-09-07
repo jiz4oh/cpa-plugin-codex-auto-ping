@@ -9,6 +9,7 @@ A minimal CLIProxyAPI plugin that sends a tiny real Codex request to every enabl
 - Uses `host.auth.list`, `host.auth.get`, and `host.http.do` only.
 - Does not change scheduler priority or write auth files.
 - Does not ping immediately when CPA starts; it waits for the next configured time.
+- Exposes a CLIProxyAPI status page and Management API for diagnostics/manual runs.
 
 ## CPA configuration
 
@@ -60,6 +61,33 @@ The model is intentionally not configurable and is fixed to:
 gpt-5.6-luna
 ```
 
+## Status page and Management API
+
+The plugin registers a browser-navigable resource with CLIProxyAPI. After the plugin is registered, the CPA management UI can expose a `Codex Auto Ping` menu entry backed by:
+
+```text
+GET /v0/resource/plugins/codex-auto-ping/status
+```
+
+The status page shows:
+
+- enabled state
+- plugin version and model
+- timezone and configured schedule
+- next run time
+- whether a run is currently in progress
+- last run time, attempted/succeeded/failed counts, and the first error if any
+- a `Run Now` action
+
+Authenticated Management API routes are also registered:
+
+```text
+GET  /v0/management/plugins/codex-auto-ping/status
+POST /v0/management/plugins/codex-auto-ping/run
+```
+
+The `POST .../run` endpoint starts a run asynchronously and returns HTTP 202. If another run is already in progress it returns HTTP 409.
+
 ## Build
 
 Linux:
@@ -87,7 +115,7 @@ https://raw.githubusercontent.com/jiz4oh/cpa-plugin-codex-auto-ping/main/registr
 Release packages use CPA's standard naming convention, for example:
 
 ```text
-codex-auto-ping_0.2.2_linux_amd64.zip
+codex-auto-ping_0.2.3_linux_amd64.zip
 └── codex-auto-ping.so
 ```
 
