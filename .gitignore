@@ -1,0 +1,7 @@
+auto-ping.so
+auto-ping.dylib
+auto-ping.dll
+auto-ping_*.so
+auto-ping_*.dylib
+auto-ping_*.dll
+auto-ping_*.h
