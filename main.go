@@ -75,6 +75,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,8 +84,8 @@ import (
 )
 
 const (
-	pluginName    = "auto-ping"
-	version       = "0.2.1"
+	pluginName    = "codex-auto-ping"
+	version       = "0.2.3"
 	codexURL      = "https://chatgpt.com/backend-api/codex/responses"
 	modelName     = "gpt-5.6-luna"
 	defaultPrompt = "ping"
@@ -97,6 +98,11 @@ var (
 	runtimeMu       sync.Mutex
 	schedulerCancel context.CancelFunc
 	currentConfig   = defaultConfig()
+
+	stateMu   sync.RWMutex
+	running   bool
+	nextRunAt time.Time
+	lastRun   *runSummary
 )
 
 type config struct {
@@ -167,8 +173,55 @@ type registerCapabilities struct {
 	ManagementAPI bool `json:"management_api"`
 }
 
+type managementRoute struct {
+	Method      string
+	Path        string
+	Menu        string
+	Description string
+}
+
+type resourceRoute struct {
+	Path        string
+	Menu        string
+	Description string
+}
+
 type managementRegistration struct {
-	Resources []any `json:"resources"`
+	Routes    []managementRoute `json:"routes,omitempty"`
+	Resources []resourceRoute   `json:"resources,omitempty"`
+}
+
+type managementRequest struct {
+	Method  string
+	Path    string
+	Headers map[string][]string
+	Query   map[string][]string
+	Body    []byte
+}
+
+type managementResponse struct {
+	StatusCode int
+	Headers    map[string][]string
+	Body       []byte
+}
+
+type runSummary struct {
+	At        time.Time `json:"at"`
+	Attempted int       `json:"attempted"`
+	Succeeded int       `json:"succeeded"`
+	Failed    int       `json:"failed"`
+	Error     string    `json:"error,omitempty"`
+}
+
+type statusResponse struct {
+	Enabled  bool        `json:"enabled"`
+	Version  string      `json:"version"`
+	Model    string      `json:"model"`
+	Timezone string      `json:"timezone"`
+	Times    []string    `json:"times"`
+	NextRun  *time.Time  `json:"next_run,omitempty"`
+	Running  bool        `json:"running"`
+	LastRun  *runSummary `json:"last_run,omitempty"`
 }
 
 type metadata struct {
@@ -229,7 +282,9 @@ func autoPingPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 		applyConfig(cfg)
 		return writeJSON(response, okEnvelope(registrationResult()))
 	case "management.register":
-		return writeJSON(response, okEnvelope(managementRegistration{Resources: []any{}}))
+		return writeJSON(response, okEnvelope(managementRegistrationResult()))
+	case "management.handle":
+		return writeJSON(response, handleManagement(requestBytes))
 	case "plugin.shutdown":
 		stopScheduler()
 		return writeJSON(response, okEnvelope(map[string]any{"status": "stopped"}))
@@ -266,6 +321,104 @@ func registrationResult() registerResult {
 	}
 }
 
+func managementRegistrationResult() managementRegistration {
+	return managementRegistration{
+		Routes: []managementRoute{
+			{Method: "GET", Path: "/plugins/codex-auto-ping/status", Description: "Return Codex Auto Ping scheduler and last-run status as JSON."},
+			{Method: "POST", Path: "/plugins/codex-auto-ping/run", Description: "Run Codex Auto Ping immediately."},
+		},
+		Resources: []resourceRoute{
+			{Path: "/status", Menu: "Codex Auto Ping", Description: "Show scheduler status, recent result, and a Run Now action."},
+		},
+	}
+}
+
+func handleManagement(raw []byte) []byte {
+	var req managementRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return failEnvelope("invalid_request", "invalid management request")
+	}
+	method := strings.ToUpper(strings.TrimSpace(req.Method))
+	path := strings.TrimSpace(req.Path)
+
+	switch {
+	case method == "GET" && strings.Contains(path, "/v0/resource/plugins/") && strings.HasSuffix(path, "/status"):
+		return okEnvelope(managementResponse{
+			StatusCode: 200,
+			Headers:    map[string][]string{"content-type": {"text/html; charset=utf-8"}, "cache-control": {"no-store"}},
+			Body:       []byte(renderStatusPage(statusSnapshot())),
+		})
+	case method == "GET" && strings.HasSuffix(path, "/plugins/codex-auto-ping/status"):
+		body, _ := json.Marshal(statusSnapshot())
+		return okEnvelope(managementResponse{
+			StatusCode: 200,
+			Headers:    map[string][]string{"content-type": {"application/json; charset=utf-8"}, "cache-control": {"no-store"}},
+			Body:       body,
+		})
+	case method == "POST" && strings.HasSuffix(path, "/plugins/codex-auto-ping/run"):
+		if !startManualRun() {
+			body, _ := json.Marshal(map[string]any{"accepted": false, "running": true, "message": "a run is already in progress"})
+			return okEnvelope(managementResponse{StatusCode: 409, Headers: map[string][]string{"content-type": {"application/json; charset=utf-8"}}, Body: body})
+		}
+		body, _ := json.Marshal(map[string]any{"accepted": true, "running": true})
+		return okEnvelope(managementResponse{StatusCode: 202, Headers: map[string][]string{"content-type": {"application/json; charset=utf-8"}}, Body: body})
+	default:
+		body, _ := json.Marshal(map[string]string{"error": "not found"})
+		return okEnvelope(managementResponse{StatusCode: 404, Headers: map[string][]string{"content-type": {"application/json; charset=utf-8"}}, Body: body})
+	}
+}
+
+func renderStatusPage(s statusResponse) string {
+	next := "-"
+	if s.NextRun != nil {
+		next = s.NextRun.Format(time.RFC3339)
+	}
+	lastAt, attempted, succeeded, failed, lastErr := "-", "-", "-", "-", "-"
+	if s.LastRun != nil {
+		lastAt = s.LastRun.At.Format(time.RFC3339)
+		attempted = strconv.Itoa(s.LastRun.Attempted)
+		succeeded = strconv.Itoa(s.LastRun.Succeeded)
+		failed = strconv.Itoa(s.LastRun.Failed)
+		if s.LastRun.Error != "" {
+			lastErr = s.LastRun.Error
+		}
+	}
+	return fmt.Sprintf(`<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Codex Auto Ping</title>
+<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;color:#222}h1{font-size:24px}table{border-collapse:collapse;width:100%%;margin:20px 0}td{padding:8px 10px;border-bottom:1px solid #ddd}td:first-child{width:160px;font-weight:600}button{padding:9px 14px;cursor:pointer}pre{white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:6px}</style></head>
+<body><h1>Codex Auto Ping</h1>
+<table>
+<tr><td>Enabled</td><td>%t</td></tr><tr><td>Version</td><td>%s</td></tr><tr><td>Model</td><td>%s</td></tr>
+<tr><td>Timezone</td><td>%s</td></tr><tr><td>Schedule</td><td>%s</td></tr><tr><td>Next run</td><td>%s</td></tr><tr><td>Running</td><td>%t</td></tr>
+<tr><td>Last run</td><td>%s</td></tr><tr><td>Attempted</td><td>%s</td></tr><tr><td>Succeeded</td><td>%s</td></tr><tr><td>Failed</td><td>%s</td></tr><tr><td>Error</td><td>%s</td></tr>
+</table>
+<button id="run" onclick="runNow()">Run Now</button><pre id="result"></pre>
+<script>async function runNow(){const b=document.getElementById('run'),o=document.getElementById('result');b.disabled=true;o.textContent='Starting...';try{const r=await fetch('/v0/management/plugins/codex-auto-ping/run',{method:'POST'});const t=await r.text();o.textContent=t;if(r.ok)setTimeout(()=>location.reload(),1200)}catch(e){o.textContent=String(e)}finally{b.disabled=false}}</script>
+</body></html>`, s.Enabled, html.EscapeString(s.Version), html.EscapeString(s.Model), html.EscapeString(s.Timezone), html.EscapeString(strings.Join(s.Times, " / ")), html.EscapeString(next), s.Running, html.EscapeString(lastAt), attempted, succeeded, failed, html.EscapeString(lastErr))
+}
+
+func statusSnapshot() statusResponse {
+	runtimeMu.Lock()
+	cfg := currentConfig
+	cfg.Times = append([]string(nil), currentConfig.Times...)
+	runtimeMu.Unlock()
+
+	stateMu.RLock()
+	defer stateMu.RUnlock()
+	var next *time.Time
+	if !nextRunAt.IsZero() {
+		t := nextRunAt
+		next = &t
+	}
+	var last *runSummary
+	if lastRun != nil {
+		copyLast := *lastRun
+		last = &copyLast
+	}
+	return statusResponse{Enabled: cfg.Enabled, Version: version, Model: modelName, Timezone: cfg.Timezone, Times: cfg.Times, NextRun: next, Running: running, LastRun: last}
+}
+
 func defaultConfig() config {
 	return config{Enabled: true, Timezone: defaultTZ, Times: append([]string(nil), defaultTimes...)}
 }
@@ -280,6 +433,7 @@ func applyConfig(cfg config) {
 	}
 	currentConfig = cfg
 	if !cfg.Enabled {
+		setNextRun(time.Time{})
 		logf("disabled by CPA config")
 		return
 	}
@@ -296,6 +450,7 @@ func stopScheduler() {
 		schedulerCancel()
 		schedulerCancel = nil
 	}
+	setNextRun(time.Time{})
 }
 
 func schedulerLoop(ctx context.Context, cfg config) {
@@ -307,6 +462,7 @@ func schedulerLoop(ctx context.Context, cfg config) {
 
 	for {
 		next := nextRun(time.Now().In(loc), loc, cfg.Times)
+		setNextRun(next)
 		logf("next run at %s model=%s", next.Format(time.RFC3339), modelName)
 		timer := time.NewTimer(time.Until(next))
 		select {
@@ -319,9 +475,82 @@ func schedulerLoop(ctx context.Context, cfg config) {
 			}
 			return
 		case <-timer.C:
-			runAll(ctx)
+			runScheduled(ctx)
 		}
 	}
+}
+
+func setNextRun(t time.Time) {
+	stateMu.Lock()
+	nextRunAt = t
+	stateMu.Unlock()
+}
+
+func claimRun() bool {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if running {
+		return false
+	}
+	running = true
+	return true
+}
+
+func startManualRun() bool {
+	if !claimRun() {
+		return false
+	}
+	go runClaimed(context.Background())
+	return true
+}
+
+func runScheduled(parent context.Context) {
+	if !claimRun() {
+		logf("scheduled run skipped: another run is already in progress")
+		return
+	}
+	runClaimed(parent)
+}
+
+func runClaimed(parent context.Context) {
+	summary := runSummary{At: time.Now()}
+	defer func() {
+		stateMu.Lock()
+		running = false
+		lastRun = &summary
+		stateMu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
+	defer cancel()
+
+	files, err := listAuth(ctx)
+	if err != nil {
+		summary.Error = "auth list failed: " + err.Error()
+		logf("%s", summary.Error)
+		return
+	}
+	var firstError string
+	for _, a := range files {
+		if !isCodex(a) || a.AuthIndex == "" || a.Disabled || a.Unavailable {
+			continue
+		}
+		summary.Attempted++
+		if err := pingAuth(ctx, a); err != nil {
+			summary.Failed++
+			if firstError == "" {
+				firstError = err.Error()
+			}
+			logf("ping failed auth=%s email=%s: %v", safeName(a), a.Email, err)
+			continue
+		}
+		summary.Succeeded++
+		logf("ping ok auth=%s email=%s", safeName(a), a.Email)
+	}
+	if summary.Failed > 0 {
+		summary.Error = firstError
+	}
+	logf("run complete attempted=%d succeeded=%d failed=%d", summary.Attempted, summary.Succeeded, summary.Failed)
 }
 
 func nextRun(now time.Time, loc *time.Location, times []string) time.Time {
@@ -337,31 +566,6 @@ func nextRun(now time.Time, loc *time.Location, times []string) time.Time {
 		}
 	}
 	return best
-}
-
-func runAll(parent context.Context) {
-	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
-	defer cancel()
-
-	files, err := listAuth(ctx)
-	if err != nil {
-		logf("auth list failed: %v", err)
-		return
-	}
-	attempted, succeeded := 0, 0
-	for _, a := range files {
-		if !isCodex(a) || a.AuthIndex == "" || a.Disabled || a.Unavailable {
-			continue
-		}
-		attempted++
-		if err := pingAuth(ctx, a); err != nil {
-			logf("ping failed auth=%s email=%s: %v", safeName(a), a.Email, err)
-			continue
-		}
-		succeeded++
-		logf("ping ok auth=%s email=%s", safeName(a), a.Email)
-	}
-	logf("run complete attempted=%d succeeded=%d failed=%d", attempted, succeeded, attempted-succeeded)
 }
 
 func isCodex(a authFile) bool {
@@ -732,4 +936,4 @@ func safeName(a authFile) string {
 	return a.AuthIndex
 }
 
-func logf(format string, args ...any) { fmt.Printf("[auto-ping] "+format+"\n", args...) }
+func logf(format string, args ...any) { fmt.Printf("[codex-auto-ping] "+format+"\n", args...) }
