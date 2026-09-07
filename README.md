@@ -2,6 +2,7 @@
 
 A minimal CLIProxyAPI plugin that sends a tiny real Codex request to every enabled/available Codex OAuth account at configured daily times.
 
+- Plugin ID: `codex-auto-ping`.
 - Model is fixed to `gpt-5.6-luna`.
 - Schedule is configured through CPA plugin config, not environment variables.
 - Default schedule: `06:00`, `11:00`, `16:00`, `21:00`.
@@ -16,7 +17,7 @@ plugins:
   enabled: true
   dir: plugins
   configs:
-    auto-ping:
+    codex-auto-ping:
       enabled: true
       timezone: Asia/Shanghai
       times:
@@ -31,7 +32,7 @@ You can customize the schedule directly in CPA config:
 ```yaml
 plugins:
   configs:
-    auto-ping:
+    codex-auto-ping:
       enabled: true
       timezone: Asia/Shanghai
       times:
@@ -45,7 +46,7 @@ Inline form is also accepted:
 ```yaml
 plugins:
   configs:
-    auto-ping:
+    codex-auto-ping:
       enabled: true
       timezone: Asia/Shanghai
       times: ["06:00", "11:00", "16:00", "21:00"]
@@ -64,16 +65,31 @@ gpt-5.6-luna
 Linux:
 
 ```bash
-CGO_ENABLED=1 go build -buildmode=c-shared -o auto-ping.so .
+CGO_ENABLED=1 go build -buildmode=c-shared -o codex-auto-ping.so .
 ```
 
 macOS:
 
 ```bash
-CGO_ENABLED=1 go build -buildmode=c-shared -o auto-ping.dylib .
+CGO_ENABLED=1 go build -buildmode=c-shared -o codex-auto-ping.dylib .
 ```
 
 Then copy the resulting shared library into CPA's configured plugin directory.
+
+## CPA Plugin Store source
+
+Add this custom source to CPA:
+
+```text
+https://raw.githubusercontent.com/jiz4oh/cpa-plugin-codex-auto-ping/main/registry.json
+```
+
+Release packages use CPA's standard naming convention, for example:
+
+```text
+codex-auto-ping_0.2.2_linux_amd64.zip
+└── codex-auto-ping.so
+```
 
 ## Behavior
 
@@ -86,6 +102,10 @@ At each configured time the plugin:
 5. Logs per-account success/failure and a final summary.
 
 The request uses `store: false` and `stream: true`. It is still a real model request and therefore can consume a small amount of quota.
+
+## Migration from auto-ping
+
+`codex-auto-ping` is a new CPA plugin ID. Remove the old `auto-ping` installation/config after installing this version to avoid both schedulers running at the same time.
 
 ## Repository
 
