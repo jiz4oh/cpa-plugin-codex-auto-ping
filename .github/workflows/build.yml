@@ -1,0 +1,24 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build plugin
+        run: CGO_ENABLED=1 go build -buildmode=c-shared -o auto-ping_linux_amd64.so .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: auto-ping_linux_amd64
+          path: |
+            auto-ping_linux_amd64.so
+            auto-ping_linux_amd64.h
