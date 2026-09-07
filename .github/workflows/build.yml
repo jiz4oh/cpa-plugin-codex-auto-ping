@@ -22,7 +22,8 @@ jobs:
       - name: Build Linux amd64 plugin
         run: |
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-            go build -buildmode=c-shared -o auto-ping_linux_amd64.so .
+            go build -buildmode=c-shared -trimpath -ldflags="-s -w" \
+            -o auto-ping_linux_amd64.so .
           rm -f auto-ping_linux_amd64.h
       - uses: actions/upload-artifact@v4
         with:
@@ -39,7 +40,8 @@ jobs:
       - name: Build macOS arm64 plugin
         run: |
           CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
-            go build -buildmode=c-shared -o auto-ping_darwin_arm64.dylib .
+            go build -buildmode=c-shared -trimpath -ldflags="-s -w" \
+            -o auto-ping_darwin_arm64.dylib .
           rm -f auto-ping_darwin_arm64.h
       - uses: actions/upload-artifact@v4
         with:
@@ -47,22 +49,54 @@ jobs:
           path: auto-ping_darwin_arm64.dylib
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name != 'pull_request'
     needs:
       - linux-amd64
       - darwin-arm64
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Create GitHub Release
+
+      - name: Resolve release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            version=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' main.go | head -n1)
+            if [[ -z "$version" ]]; then
+              echo "Unable to read plugin version from main.go" >&2
+              exit 1
+            fi
+            tag="v${version#v}"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+            echo "Invalid release tag: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
         run: |
-          gh release create "$TAG" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$TAG" \
-            --generate-notes
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --generate-notes
+          fi
