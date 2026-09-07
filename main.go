@@ -85,7 +85,7 @@ import (
 
 const (
 	pluginName    = "codex-auto-ping"
-	version       = "0.2.3"
+	version       = "0.2.4"
 	codexURL      = "https://chatgpt.com/backend-api/codex/responses"
 	modelName     = "gpt-5.6-luna"
 	defaultPrompt = "ping"
@@ -386,15 +386,16 @@ func renderStatusPage(s statusResponse) string {
 	return fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Codex Auto Ping</title>
-<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;color:#222}h1{font-size:24px}table{border-collapse:collapse;width:100%%;margin:20px 0}td{padding:8px 10px;border-bottom:1px solid #ddd}td:first-child{width:160px;font-weight:600}button{padding:9px 14px;cursor:pointer}pre{white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:6px}</style></head>
+<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;color:#222}h1{font-size:24px}table{border-collapse:collapse;width:100%%;margin:20px 0}td{padding:8px 10px;border-bottom:1px solid #ddd}td:first-child{width:160px;font-weight:600}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:16px}input{padding:9px 10px;min-width:280px}button{padding:9px 14px;cursor:pointer}.hint{font-size:13px;color:#666;margin-top:8px}pre{white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:6px}</style></head>
 <body><h1>Codex Auto Ping</h1>
 <table>
 <tr><td>Enabled</td><td>%t</td></tr><tr><td>Version</td><td>%s</td></tr><tr><td>Model</td><td>%s</td></tr>
 <tr><td>Timezone</td><td>%s</td></tr><tr><td>Schedule</td><td>%s</td></tr><tr><td>Next run</td><td>%s</td></tr><tr><td>Running</td><td>%t</td></tr>
 <tr><td>Last run</td><td>%s</td></tr><tr><td>Attempted</td><td>%s</td></tr><tr><td>Succeeded</td><td>%s</td></tr><tr><td>Failed</td><td>%s</td></tr><tr><td>Error</td><td>%s</td></tr>
 </table>
-<button id="run" onclick="runNow()">Run Now</button><pre id="result"></pre>
-<script>async function runNow(){const b=document.getElementById('run'),o=document.getElementById('result');b.disabled=true;o.textContent='Starting...';try{const r=await fetch('/v0/management/plugins/codex-auto-ping/run',{method:'POST'});const t=await r.text();o.textContent=t;if(r.ok)setTimeout(()=>location.reload(),1200)}catch(e){o.textContent=String(e)}finally{b.disabled=false}}</script>
+<div class="actions"><input id="management-key" type="password" autocomplete="off" placeholder="Management Key"><button id="run" onclick="runNow()">Run Now</button></div>
+<div class="hint">The key is kept only in this page's memory and is not stored by the plugin.</div><pre id="result"></pre>
+<script>async function runNow(){const b=document.getElementById('run'),o=document.getElementById('result'),k=document.getElementById('management-key').value.trim();if(!k){o.textContent='Management Key is required.';return}b.disabled=true;o.textContent='Starting...';try{const r=await fetch('/v0/management/plugins/codex-auto-ping/run',{method:'POST',headers:{'Authorization':'Bearer '+k}});const t=await r.text();o.textContent=t;if(r.ok)setTimeout(()=>location.reload(),1200)}catch(e){o.textContent=String(e)}finally{b.disabled=false}}</script>
 </body></html>`, s.Enabled, html.EscapeString(s.Version), html.EscapeString(s.Model), html.EscapeString(s.Timezone), html.EscapeString(strings.Join(s.Times, " / ")), html.EscapeString(next), s.Running, html.EscapeString(lastAt), attempted, succeeded, failed, html.EscapeString(lastErr))
 }
 
