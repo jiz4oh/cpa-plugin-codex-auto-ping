@@ -6,7 +6,7 @@
       "name": "Codex Auto Ping",
       "description": "Reliably ping every enabled Codex OAuth account at configured daily times using gpt-5.6-luna.",
       "author": "jiz4oh",
-      "version": "0.2.5",
+      "version": "0.2.6",
       "repository": "https://github.com/jiz4oh/cpa-plugin-codex-auto-ping",
       "homepage": "https://github.com/jiz4oh/cpa-plugin-codex-auto-ping",
       "license": "MIT",
