@@ -86,14 +86,14 @@ import (
 
 const (
 	pluginName    = "codex-auto-ping"
-	version       = "0.2.5"
+	version       = "0.2.6"
 	codexURL      = "https://chatgpt.com/backend-api/codex/responses"
 	modelName     = "gpt-5.6-luna"
 	defaultPrompt = "ping"
 	defaultTZ     = "Asia/Shanghai"
 
 	windowInterval = 5 * time.Hour
-	windowGuard    = 60 * time.Second
+	windowGuard    = 1 * time.Second
 	runTimeout     = 20 * time.Minute
 	attemptTimeout = 45 * time.Second
 	maxAttempts    = 3
